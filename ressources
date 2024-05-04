@@ -2,9 +2,12 @@ papers:
 * TransCenter: https://arxiv.org/pdf/2103.15145 : Transformers for Multiple-Object Tracking
 - Energy Transformer: https://arxiv.org/pdf/2302.07253 : Graph classification/ Graph Anomaly detection
 - 
+-
 
 
 
 links:
 - open-source pre-trained "state-of-the-art" transformers: https://huggingface.co/docs/transformers/index
-check in particular their section on video classification: https://huggingface.co/docs/transformers/tasks/video_classification
+in particular their section on video classification: https://huggingface.co/docs/transformers/tasks/video_classification
+-
+- 
