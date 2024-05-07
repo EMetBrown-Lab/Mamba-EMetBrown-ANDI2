@@ -1,9 +1,10 @@
 papers:
-* TransCenter: https://arxiv.org/pdf/2103.15145 : Transformers for Multiple-Object Tracking
+- The Physics of Machine Learning: https://arxiv.org/pdf/2112.00851 : This is just for the introductory stuff
+- TransCenter: https://arxiv.org/pdf/2103.15145 : Transformers for Multiple-Object Tracking
 - Energy Transformer: https://arxiv.org/pdf/2302.07253 : Graph classification/ Graph Anomaly detection
-- Brownian Motion in the Transformer Model: https://arxiv.org/pdf/2107.05264 and the model they propose: https://github.com/closest-git/DeepFormer/tree/master
+* Brownian Motion in the Transformer Model: https://arxiv.org/pdf/2107.05264 and the model they propose: https://github.com/closest-git/DeepFormer/tree/master
 - Machine Learning Classification of Multifractional Brownian Motion Realizations: https://ceur-ws.org/Vol-2608/paper73.pdf
-
+* Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting : https://arxiv.org/pdf/2012.07436
 
 
 links:
