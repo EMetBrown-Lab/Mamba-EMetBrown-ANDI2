@@ -8,6 +8,7 @@ papers:
 
 
 links:
+- explains attention quite well: https://peterbloem.nl/blog/transformers
 - open-source pre-trained "state-of-the-art" transformers: https://huggingface.co/docs/transformers/index
 in particular their section on video classification: https://huggingface.co/docs/transformers/tasks/video_classification
 -
