@@ -1,4 +1,5 @@
 papers:
+- The competiton's latest model? They use a mix of a CNN with a transformer encoder: https://arxiv.org/pdf/2302.00410
 - The Physics of Machine Learning: https://arxiv.org/pdf/2112.00851 : This is just for the introductory stuff
 - TransCenter: https://arxiv.org/pdf/2103.15145 : Transformers for Multiple-Object Tracking
 - Energy Transformer: https://arxiv.org/pdf/2302.07253 : Graph classification/ Graph Anomaly detection
@@ -8,6 +9,7 @@ papers:
 
 
 links:
+*The competition's latest known model? https://github.com/borjarequena/step
 - explains attention quite well: https://peterbloem.nl/blog/transformers
 - open-source pre-trained "state-of-the-art" transformers: https://huggingface.co/docs/transformers/index
 in particular their section on video classification: https://huggingface.co/docs/transformers/tasks/video_classification
