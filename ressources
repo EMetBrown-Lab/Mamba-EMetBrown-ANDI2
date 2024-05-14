@@ -1,3 +1,9 @@
+It's Mamba time:
+- A survey of Mamba by Microsoft: https://arxiv.org/pdf/2404.16112
+- MambaOut: Shows that Mamba has potential for segmentation and anomaly detection: https://arxiv.org/pdf/2405.07992
+
+
+
 papers:
 - The competiton's latest model? They use a mix of a CNN with a transformer encoder: https://arxiv.org/pdf/2302.00410
 - The Physics of Machine Learning: https://arxiv.org/pdf/2112.00851 : This is just for the introductory stuff
