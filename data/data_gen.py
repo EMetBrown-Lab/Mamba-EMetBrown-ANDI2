@@ -217,7 +217,7 @@ def main(n):
         save_data=True,
         files_reorg=False,
         repeat_exp=True,
-        path="./data/test_batch/" + str(n[0]) + "/" + str(n[1]) + "/",
+        path= n[2] + str(n[0]) + "/" + str(n[1]) + "/",
         save_labels_reorg=True,
         return_timestep_labs=True,
         # prefix = str(n) + "_",
@@ -240,9 +240,10 @@ if __name__ == "__main__":
     #         save_labels_reorg=False,
     #         return_timestep_labs=True,
     #     )
+    for batch in range(1,11):
 
-    with Pool(18) as p:
-        exp = [1, 2, 3, 4, 5]
-        exps = np.random.choice(exp, size=100)
-        runs = [(i, n) for n, i in enumerate(exps)]
-        print(p.map(main, runs))
+        with Pool(18) as p:
+            exp = [1, 2, 3, 4, 5]
+            exps = np.random.choice(exp, size=1000)
+            runs = [(i, n, f"./data/small_batch_{batch}/") for n, i in enumerate(exps)]
+            print(p.map(main, runs))
