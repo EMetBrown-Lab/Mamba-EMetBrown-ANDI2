@@ -9,7 +9,7 @@ import numpy as np
 def normalize(data):
     # Calculate displacement in x and y directions
     # Normalize by substring mean and dividing by variance.
-    
+
     displacement_x = []
     displacement_y = []
     for _, group in data.groupby("traj_idx"):
@@ -25,7 +25,7 @@ def normalize(data):
     variance_y = np.sqrt(np.std(displacement_y))
 
     # Normalize data
-    data.loc[:, "x"] = (data["x"] - data["x"].mean()) / variance_x.04
+    data.loc[:, "x"] = (data["x"] - data["x"].mean()) / variance_x
     data.loc[:, "y"] = (data["y"] - data["y"].mean()) / variance_y
 
 
