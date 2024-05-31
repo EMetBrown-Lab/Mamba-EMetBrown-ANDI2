@@ -198,14 +198,14 @@ class Dataset_separating_trajs(Dataset):
             # Return data and label
             return datas, labels
         else:
-            data, label = apply_padding(df)
+            data, label = apply_padding(df, *self.pad)
             
             if self.transform:
                 data = normalize_np(data)
             
 
 
-            for i in self.pad[0]:
+            for i in range(self.pad[0]):
                 datas.append(data[i,:,:])
                 labels.append(label[i,:,:])
                 return datas, labels
