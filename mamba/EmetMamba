@@ -8,6 +8,7 @@ import torch.nn.functional as F
 
 from mamba import Mamba, MambaConfig
 
+
 # Define a dataclass for the EmetMamba model
 @dataclass
 class EmetMamba(nn.Module):
@@ -37,7 +38,7 @@ class EmetMamba(nn.Module):
         False  # use official CUDA implementation when training (not compatible with (b)float16)
     )
 
-    conv_stack:int = 2
+    conv_stack: int = 2
 
     # Initialize the model
     def __post_init__(self):
@@ -81,16 +82,12 @@ class EmetMamba(nn.Module):
     # Define the convolutional stack
     def _convolutionnal_stack(self):
 
-        stacks = []
-
-        for _ in range(self.conv_stack):
-            conv_bloc = convolutional_bloc(
-                self.d_inner,
-                self.d_conv,
-                self.conv_bias)
-            stacks.append(conv_bloc)
-
-        return nn.Sequential(*stacks)
+        return nn.Sequential(
+            *[
+                convolutional_bloc(self.d_inner, self.d_conv, self.conv_bias)
+                for _ in range(self.conv_stack)
+            ]
+        )
 
     # Define the forward pass
     def forward(self, x):
@@ -129,34 +126,31 @@ class convolutional_bloc(nn.Module):
     # Define the forward pass
     def forward(self, x):
         # Get the size of the input tensor
-        _, L, _ = x.size() # B,L,D
+        _, L, _ = x.size()  # B,L,D
 
         # Initialize the instance normalization layer
         self.IN_norm = nn.InstanceNorm1d(L)
 
         # Save the initial input tensor
-        x_start = x.clone().detach() # B,L,D
+        x_start = x.clone().detach()  # B,L,D
 
         # Transpose the input tensor
-        x = x.transpose(1, 2) # B,D,L
+        x = x.transpose(1, 2)  # B,D,L
 
         # Apply the 1D convolution layer
-        x = self.conv(x)[:, :, :L] # B,D,L using a short filter
+        x = self.conv(x)[:, :, :L]  # B,D,L using a short filter
 
         # Transpose the output tensor
-        x = x.transpose(1, 2) # B,D,L
+        x = x.transpose(1, 2)  # B,D,L
 
         # Apply the instance normalization layer
-        x = self.IN_norm(x) # B,D,L
+        x = self.IN_norm(x)  # B,D,L
 
         # Apply the leaky ReLU activation function
-        x = F.leaky_relu(x) # B,D,L
+        x = F.leaky_relu(x)  # B,D,L
 
         # Add the initial input tensor
-        x = x + x_start # B,D,L
+        x = x + x_start  # B,D,L
 
         # Return the output tensor
         return x
-
-
-        
