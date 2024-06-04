@@ -42,6 +42,7 @@ class EmetMamba(nn.Module):
 
     # Initialize the model
     def __post_init__(self):
+        super().__init__()
         self.d_inner = self.expand_factor * self.d_model  # E*D = ED in comments
 
         if self.dt_rank == "auto":
@@ -93,6 +94,10 @@ class EmetMamba(nn.Module):
     def forward(self, x):
 
         convolutional_stack = _self.convolutionnal_stack()
+
+        x = convolutional_stack(x)
+
+        return x
 
         ## to continue
 
