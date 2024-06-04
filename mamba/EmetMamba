@@ -81,7 +81,7 @@ class EmetMamba(nn.Module):
         return conv1d
 
     # Define the convolutional stack
-    def _convolutionnal_stack(self):
+    def _convolutional_stack(self):
 
         return nn.Sequential(
             *[
@@ -93,7 +93,7 @@ class EmetMamba(nn.Module):
     # Define the forward pass
     def forward(self, x):
 
-        convolutional_stack = _self.convolutionnal_stack()
+        convolutional_stack = _self._convolutional_stack()
 
         x = convolutional_stack(x)
 
