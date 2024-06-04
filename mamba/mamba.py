@@ -277,7 +277,7 @@ class MambaBlock(nn.Module):
 
         BX = deltaB * (x.unsqueeze(-1)) # (B, L, ED, N)
         
-        hs = pscan(deltaA, BX)
+        hs = pscan.pscan(deltaA, BX)
 
         y = (hs @ C.unsqueeze(-1)).squeeze(3) # (B, L, ED, N) @ (B, L, N, 1) -> (B, L, ED, 1)
 
