@@ -94,14 +94,14 @@ class EmetMamba(nn.Module):
     # Define the forward pass
     def forward(self, x):
 
-        convolutional_stack = _self.convolutionnal_stack()
+        convolutional_stack = self._convolutionnal_stack()
         x = convolutional_stack(x)
 
-        self.config = self.MambaConfig(d_model, n_layers)
-        self.model = self.Mamba(config)
-        x = model(x)
+        self.model = self.Mamba(self.mambaconfig)
+        x = self.model(x)
 
         return x
+        # self.config = self.MambaConfig(self.d_model, self.n_layers)
 
 
 # Define a dataclass for the convolutional block

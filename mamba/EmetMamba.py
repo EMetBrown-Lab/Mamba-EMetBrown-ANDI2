@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mamba import Mamba, MambaConfig
+from mamba import MambaConfig
+from mamba_ssm import Mamba
 
 
 # Define a dataclass for the EmetMamba model
@@ -48,7 +49,7 @@ class EmetMamba(nn.Module):
         if self.dt_rank == "auto":
             self.dt_rank = math.ceil(self.d_model / 16)
 
-        self.mambaconfig = MambaConfig(
+        self.config = MambaConfig(
             self.d_model,
             self.n_layers,
             self.dt_rank,
@@ -67,25 +68,14 @@ class EmetMamba(nn.Module):
             self.use_cuda,
         )
 
-    # Define the 1D convolution layer
-    def conv1d(self):
 
-        conv1d = nn.Conv1d(
-            in_channels=self.d_inner,
-            out_channels=self.d_inner,
-            kernel_size=self.d_conv,
-            bias=self.conv_bias,
-            groups=self.d_inner,
-            padding=self.d_conv - 1,
-        )
-        return conv1d
 
     # Define the convolutional stack
     def _convolutional_stack(self):
 
         return nn.Sequential(
             *[
-                convolutional_bloc(self.d_inner, self.d_conv, self.conv_bias)
+                convolutional_bloc(self.d_model, self.d_conv, self.conv_bias)
                 for _ in range(self.conv_stack)
             ]
         )
@@ -93,13 +83,22 @@ class EmetMamba(nn.Module):
     # Define the forward pass
     def forward(self, x):
 
-        convolutional_stack = _self._convolutional_stack()
+        convolutional_stack = self._convolutional_stack()
 
         x = convolutional_stack(x)
 
+        x2  = x.clone().detach()
+
+        mamba = Mamba(MambaConfig)
+
+        x = mamba(x)
+
+
+        x2 = x2 
+
         return x
 
-        ## to continue
+        
 
 
 # Define a dataclass for the convolutional block
@@ -159,3 +158,32 @@ class convolutional_bloc(nn.Module):
 
         # Return the output tensor
         return x
+
+
+
+
+class BiMamba(nn.module):
+    def __init__(self, MambaConfig, dropout):
+        super().__init__()
+        self.config = MambaConfig
+
+        self.dropout = nn.Dropout(dropout)
+        self.mamba =  Mamba(
+            d_model= self.config.d_model,
+            d_state = self.config.n_layers,
+            d_conv= self.config.d_conv,
+            expand=self.config.expand_factor,
+        )
+
+        self.mamba_flip = Mamba(
+            d_model= self.config.d_model,
+            d_state = self.config.n_layers,
+            d_conv= self.config.d_conv,
+            expand=self.config.expand_factor,          
+        )
+
+        self.
+        ## False bias -> No learnable weights in this layer 
+        ## it reduces the risks of over fitting
+            
+    def forward(self, x):
