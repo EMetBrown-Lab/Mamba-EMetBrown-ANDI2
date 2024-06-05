@@ -10,10 +10,8 @@ from mamba import MambaConfig
 from mamba_ssm import Mamba
 
 
-# Define a dataclass for the EmetMamba model
 @dataclass
-class EmetMamba(nn.Module):
-    # Define the model parameters
+class EmetConfig:
     d_model: int  # D
     n_layers: int
     dt_rank: Union[int, str] = "auto"
@@ -21,7 +19,6 @@ class EmetMamba(nn.Module):
     expand_factor: int = 2  # E in paper/comments
     d_conv: int = 4
 
-    # Define the model hyperparameters
     dt_min: float = 0.001
     dt_max: float = 0.1
     dt_init: str = "random"  # "random" or "constant"
@@ -39,7 +36,20 @@ class EmetMamba(nn.Module):
         False  # use official CUDA implementation when training (not compatible with (b)float16)
     )
 
-    conv_stack: int = 2
+    conv_stack: int = 2  # How many convolutial stack at the beggining
+    dropout: float = 0.05  # how much dropout in the Add&Norm layer of the bi-Mamba
+
+    def __post_init__(self):
+        self.d_inner = self.expand_factor * self.d_model  # E*D = ED in comments
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        if self.dt_rank == "auto":
+            self.dt_rank = math.ceil(self.d_model / 16)
+
+
+# Define a dataclass for the EmetMamba model
+@dataclass
+class EmetMamba(nn.Module):
+    # Define the model parameters
 
     # Initialize the model
     def __post_init__(self):
@@ -68,8 +78,6 @@ class EmetMamba(nn.Module):
             self.use_cuda,
         )
 
-
-
     # Define the convolutional stack
     def _convolutional_stack(self):
 
@@ -87,18 +95,15 @@ class EmetMamba(nn.Module):
 
         x = convolutional_stack(x)
 
-        x2  = x.clone().detach()
+        x2 = x.clone().detach()
 
-        mamba = Mamba(MambaConfig)
+        mamba = Mamba2(MambaConfig)
 
         x = mamba(x)
 
-
-        x2 = x2 
+        x2 = x2
 
         return x
-
-        
 
 
 # Define a dataclass for the convolutional block
@@ -160,30 +165,101 @@ class convolutional_bloc(nn.Module):
         return x
 
 
-
-
-class BiMamba(nn.module):
-    def __init__(self, MambaConfig, dropout):
+class BiMamba(nn.Module):
+    def __init__(self, config):
         super().__init__()
-        self.config = MambaConfig
+        self.config = config
 
-        self.dropout = nn.Dropout(dropout)
-        self.mamba =  Mamba(
-            d_model= self.config.d_model,
-            d_state = self.config.n_layers,
-            d_conv= self.config.d_conv,
+        self.forward_mamba = Mamba(
+            d_model=self.config.d_model,
+            d_state=self.config.n_layers,
+            d_conv=self.config.d_conv,
             expand=self.config.expand_factor,
+        ).to(self.config.device)
+
+        self.backward_mamba = Mamba(
+            d_model=self.config.d_model,
+            d_state=self.config.n_layers,
+            d_conv=self.config.d_conv,
+            expand=self.config.expand_factor,
+        ).to(self.config.device)
+
+        self.forward_norm = nn.LayerNorm(self.config.d_model, bias=self.config.bias).to(
+            self.config.device
         )
 
-        self.mamba_flip = Mamba(
-            d_model= self.config.d_model,
-            d_state = self.config.n_layers,
-            d_conv= self.config.d_conv,
-            expand=self.config.expand_factor,          
-        )
+        self.backward_norm = nn.LayerNorm(
+            self.config.d_model, bias=self.config.bias
+        ).to(self.config.device)
 
-        self.
-        ## False bias -> No learnable weights in this layer 
+        self.final_norm = nn.LayerNorm(self.config.d_model, bias=self.config.bias).to(
+            self.config.device
+        )
+        self.dropout = nn.Dropout(self.config.dropout).to(self.config.device)
+
+        self.feed_forward = nn.Sequential(
+            nn.Linear(
+                self.config.d_model, self.config.d_model * self.config.expand_factor
+            ),
+            nn.GELU(),
+            nn.Linear(
+                self.config.d_model * self.config.expand_factor, self.config.d_model
+            ),
+        ).to(self.config.device)
+
+        ## False bias -> No learnable weights in this layer
         ## it reduces the risks of over fitting
-            
+
     def forward(self, x):
+        # x = x.to("cuda")
+        residual = x
+
+        ## Forward Branch
+
+        y_forward_mamba = self.forward_mamba(x)
+
+        ## Add & norm of the forward mamba
+        y_forward_mamba = self.dropout(y_forward_mamba + residual)
+        y_forward_mamba = self.forward_norm(y_forward_mamba)
+
+
+        ##Backward Branch
+
+        y__backward_mamba = torch.flip(x, [1])  # Flipping only the time dim
+        y__backward_mamba = self.backward_mamba(y__backward_mamba)
+        y__backward_mamba = torch.flip(y__backward_mamba, [1])
+
+        ## Add & norm of the backward mamba
+        y__backward_mamba = y__backward_mamba + residual
+        y__backward_mamba = self.dropout(y__backward_mamba)
+        y__backward_mamba = self.forward_norm(y__backward_mamba)
+
+        ## Reconnect branches
+
+        y = y_forward_mamba + y__backward_mamba
+
+        residual = y  # change the residual the last add & norm after the feed forward
+
+        ## Making it pass thourg a feedforward
+
+        y = self.feed_forward(y)
+
+        ## Last Add & norm
+
+        y = self.dropout(y + residual)
+
+        y = self.final_norm(y)
+
+        return y
+
+
+if __name__ == "__main__":
+
+    B, L, D = 40, 100, 3
+    x = torch.randn(B, L, D).to("cuda")
+    config = EmetConfig(D,L)
+    model = BiMamba(config)
+
+    y = model(x)
+
+    assert(y.size() == x.size())
