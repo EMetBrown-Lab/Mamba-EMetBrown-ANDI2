@@ -6,8 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mamba import MambaConfig
-from mamba_ssm import Mamba
 
 
 @dataclass
@@ -36,12 +34,13 @@ class EmetConfig:
         False  # use official CUDA implementation when training (not compatible with (b)float16)
     )
 
+    bi_mamba_stacks: int = 1  # How many bi mamba to stack
     conv_stack: int = 2  # How many convolutial stack at the beggining
     dropout: float = 0.05  # how much dropout in the Add&Norm layer of the bi-Mamba
 
     def __post_init__(self):
         self.d_inner = self.expand_factor * self.d_model  # E*D = ED in comments
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if self.dt_rank == "auto":
             self.dt_rank = math.ceil(self.d_model / 16)
 
@@ -51,68 +50,66 @@ class EmetConfig:
 class EmetMamba(nn.Module):
     # Define the model parameters
 
+    config: EmetConfig
+
     # Initialize the model
     def __post_init__(self):
         super().__init__()
-        self.d_inner = self.expand_factor * self.d_model  # E*D = ED in comments
+        self.d_inner = (
+            self.config.expand_factor * self.config.d_model
+        )  # E*D = ED in comments
 
         if self.dt_rank == "auto":
             self.dt_rank = math.ceil(self.d_model / 16)
 
-        self.config = MambaConfig(
-            self.d_model,
-            self.n_layers,
-            self.dt_rank,
-            self.d_state,
-            self.expand_factor,
-            self.d_conv,
-            self.dt_min,
-            self.dt_max,
-            self.dt_init,
-            self.dt_scale,
-            self.rms_norm_eps,
-            self.bias,
-            self.conv_bias,
-            self.inner_layernorms,
-            self.pscan,
-            self.use_cuda,
-        )
+        self._convolutional_stack()
+        self._bi_mamba_stacks()
 
     # Define the convolutional stack
     def _convolutional_stack(self):
 
-        return nn.Sequential(
-            *[
-                convolutional_bloc(self.d_model, self.d_conv, self.conv_bias)
-                for _ in range(self.conv_stack)
-            ]
+        self.convolutional_stack_input = nn.Sequential(
+            *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
+        )
+
+
+        self.convolutional_stack_alpha_D = nn.Sequential(
+            *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
+        )
+
+
+    # Define the biMamba stacks
+    def _bi_mamba_stacks(self):
+
+        self.bi_mamba_stacks_s = nn.Sequential(
+            [BiMamba(self.config) for _ in range(self.config.bi_mamba_stacks)]
+        )
+        self.bi_mamba_stacks_D_alpha = nn.Sequential(
+            [BiMamba(self.config) for _ in range(self.config.bi_mamba_stacks)]
         )
 
     # Define the forward pass
     def forward(self, x):
 
-        convolutional_stack = self._convolutional_stack()
+        copy_x = x
 
-        x = convolutional_stack(x)
 
-        x2 = x.clone().detach()
 
-        mamba = Mamba2(MambaConfig)
+        # Making input pass through the convolutional stack
 
-        x = mamba(x)
+        x_conved = self.convolutional_stack_input(x)
 
-        x2 = x2
+        # Then making it pass through the 
 
-        return x
+
+
 
 
 # Define a dataclass for the convolutional block
 @dataclass
 class convolutional_bloc(nn.Module):
     # Define the block parameters
-    d_inner: int
-    d_conv: int
-    conv_bias: bool
+    config: EmetConfig
 
     # Initialize the block
     def __post_init__(self):
@@ -124,13 +121,13 @@ class convolutional_bloc(nn.Module):
     # Define the 1D convolution layer
     def conv1d(self):
         self.conv = nn.Conv1d(
-            in_channels=self.d_inner,
-            out_channels=self.d_inner,
-            kernel_size=self.d_conv,
-            bias=self.conv_bias,
-            groups=self.d_inner,
-            padding=self.d_conv - 1,
-        )
+            in_channels=self.config.d_model,
+            out_channels=self.config.d_model,
+            kernel_size=self.config.d_conv,
+            bias=self.config.conv_bias,
+            groups=self.config.d_model,
+            padding=self.config.d_conv - 1,
+        ).to(self.config.device)
 
     # Define the forward pass
     def forward(self, x):
@@ -138,10 +135,10 @@ class convolutional_bloc(nn.Module):
         _, L, _ = x.size()  # B,L,D
 
         # Initialize the instance normalization layer
-        self.IN_norm = nn.InstanceNorm1d(L)
+        self.IN_norm = nn.InstanceNorm1d(L,device=self.config.device)
 
         # Save the initial input tensor
-        x_start = x.clone().detach()  # B,L,D
+        residual = x  # B,L,D
 
         # Transpose the input tensor
         x = x.transpose(1, 2)  # B,D,L
@@ -159,7 +156,7 @@ class convolutional_bloc(nn.Module):
         x = F.leaky_relu(x)  # B,D,L
 
         # Add the initial input tensor
-        x = x + x_start  # B,D,L
+        x = x + residual # B,D,L
 
         # Return the output tensor
         return x
@@ -167,9 +164,16 @@ class convolutional_bloc(nn.Module):
 
 class BiMamba(nn.Module):
     def __init__(self, config):
+        # Initialize the BiMamba module with a given configuration
         super().__init__()
         self.config = config
 
+        if torch.cuda.is_available():
+            from mamba_ssm import Mamba
+        else:
+            from Mamba import Mamba
+
+        # Initialize two Mamba modules for forward and backward passes
         self.forward_mamba = Mamba(
             d_model=self.config.d_model,
             d_state=self.config.n_layers,
@@ -184,6 +188,7 @@ class BiMamba(nn.Module):
             expand=self.config.expand_factor,
         ).to(self.config.device)
 
+        # Initialize layer normalization modules for forward, backward, and final passes
         self.forward_norm = nn.LayerNorm(self.config.d_model, bias=self.config.bias).to(
             self.config.device
         )
@@ -195,8 +200,11 @@ class BiMamba(nn.Module):
         self.final_norm = nn.LayerNorm(self.config.d_model, bias=self.config.bias).to(
             self.config.device
         )
+
+        # Initialize a dropout module
         self.dropout = nn.Dropout(self.config.dropout).to(self.config.device)
 
+        # Initialize a feed-forward module with two linear layers and a GELU activation function
         self.feed_forward = nn.Sequential(
             nn.Linear(
                 self.config.d_model, self.config.d_model * self.config.expand_factor
@@ -207,47 +215,35 @@ class BiMamba(nn.Module):
             ),
         ).to(self.config.device)
 
-        ## False bias -> No learnable weights in this layer
-        ## it reduces the risks of over fitting
+        # Note: Setting bias=False in the layer normalization modules reduces the risk of overfitting
 
     def forward(self, x):
-        # x = x.to("cuda")
+        # Define the forward pass through the BiMamba module
         residual = x
 
-        ## Forward Branch
-
+        # Forward branch
         y_forward_mamba = self.forward_mamba(x)
-
-        ## Add & norm of the forward mamba
         y_forward_mamba = self.dropout(y_forward_mamba + residual)
         y_forward_mamba = self.forward_norm(y_forward_mamba)
 
+        # Backward branch
+        y_backward_mamba = torch.flip(x, [1])  # Flip the time dimension
+        y_backward_mamba = self.backward_mamba(y_backward_mamba)
+        y_backward_mamba = torch.flip(y_backward_mamba, [1])
+        y_backward_mamba = y_backward_mamba + residual
+        y_backward_mamba = self.dropout(y_backward_mamba)
+        y_backward_mamba = self.forward_norm(y_backward_mamba)
 
-        ##Backward Branch
+        # Reconnect branches
+        y = y_forward_mamba + y_backward_mamba
 
-        y__backward_mamba = torch.flip(x, [1])  # Flipping only the time dim
-        y__backward_mamba = self.backward_mamba(y__backward_mamba)
-        y__backward_mamba = torch.flip(y__backward_mamba, [1])
+        residual = y  # Update the residual for the feed-forward module
 
-        ## Add & norm of the backward mamba
-        y__backward_mamba = y__backward_mamba + residual
-        y__backward_mamba = self.dropout(y__backward_mamba)
-        y__backward_mamba = self.forward_norm(y__backward_mamba)
-
-        ## Reconnect branches
-
-        y = y_forward_mamba + y__backward_mamba
-
-        residual = y  # change the residual the last add & norm after the feed forward
-
-        ## Making it pass thourg a feedforward
-
+        # Feed-forward module
         y = self.feed_forward(y)
 
-        ## Last Add & norm
-
+        # Final add and norm
         y = self.dropout(y + residual)
-
         y = self.final_norm(y)
 
         return y
@@ -257,9 +253,9 @@ if __name__ == "__main__":
 
     B, L, D = 40, 100, 3
     x = torch.randn(B, L, D).to("cuda")
-    config = EmetConfig(D,L)
-    model = BiMamba(config)
+    config = EmetConfig(D, L)
+    model = convolutional_bloc(config)
 
     y = model(x)
 
-    assert(y.size() == x.size())
+    assert y.size() == x.size()
