@@ -1,11 +1,10 @@
 import math
 from dataclasses import dataclass
 from typing import Union
-
+from copy import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 
 
 @dataclass
@@ -45,64 +44,96 @@ class EmetConfig:
             self.dt_rank = math.ceil(self.d_model / 16)
 
 
-# Define a dataclass for the EmetMamba model
-@dataclass
-class EmetMamba(nn.Module):
-    # Define the model parameters
-
-    config: EmetConfig
-
     # Initialize the model
     def __post_init__(self):
+        # Call the parent's __init__ method
         super().__init__()
+        
+        # Calculate the inner dimension (d_inner) based on the expand factor and model dimension
         self.d_inner = (
             self.config.expand_factor * self.config.d_model
         )  # E*D = ED in comments
 
-        if self.dt_rank == "auto":
-            self.dt_rank = math.ceil(self.d_model / 16)
+        # If dt_rank is set to "auto", calculate it based on the model dimension
+        if self.config.dt_rank == "auto":
+            self.config.dt_rank = math.ceil(self.d_model / 16)
 
+        # Initialize the convolutional stack and biMamba stacks
         self._convolutional_stack()
         self._bi_mamba_stacks()
 
+        # Define the output projection layers for s and alpha_D_a
+        self.out_proj_s = nn.Sequential(
+            # Feed-forward layer with d_model input, d_inner hidden, and d_model output
+            Feed_foward(
+                self.config.d_model,
+                self.config.d_inner,
+                self.config,
+            ),
+            # Linear layer with d_model input, 1 output, and no bias
+            nn.Linear(self.config.d_model, 1, bias=False),
+        ).to(self.config.device)
+
+        self.out_proj_D_a = nn.Sequential(
+            # Feed-forward layer with d_model + 1 input, (d_model + 1) * expand_factor hidden, and d_model + 1 output
+            Feed_foward(
+                self.config.d_model + 1,
+                (self.config.d_model + 1) * self.config.expand_factor,
+                self.config,
+            ),
+            # Linear layer with d_model + 1 input, 2 output, and no bias
+            nn.Linear(self.config.d_model + 1, 2, bias=False),
+        ).to(self.config.device)
+
     # Define the convolutional stack
     def _convolutional_stack(self):
-
+        # Initialize the convolutional stack for input and alpha_D
         self.convolutional_stack_input = nn.Sequential(
             *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
         )
-
 
         self.convolutional_stack_alpha_D = nn.Sequential(
             *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
         )
 
-
     # Define the biMamba stacks
     def _bi_mamba_stacks(self):
-
+        # Initialize the biMamba stacks for s and biMamba_plus
         self.bi_mamba_stacks_s = nn.Sequential(
-            [BiMamba(self.config) for _ in range(self.config.bi_mamba_stacks)]
+            *[BiMamba(self.config) for _ in range(self.config.bi_mamba_stacks)]
         )
-        self.bi_mamba_stacks_D_alpha = nn.Sequential(
-            [BiMamba(self.config) for _ in range(self.config.bi_mamba_stacks)]
+
+        self.bi_mamba_plus = nn.Sequential(
+            *[Bi_mamba_plus(self.config) for _ in range(self.config.bi_mamba_stacks)]
         )
 
     # Define the forward pass
     def forward(self, x):
-
+        # Make a copy of the input
         copy_x = x
 
-
-
-        # Making input pass through the convolutional stack
-
+        # Pass the input through the convolutional stack
         x_conved = self.convolutional_stack_input(x)
 
-        # Then making it pass through the 
+        # Pass the convolved input through the biMamba stacks for s
+        x = self.bi_mamba_stacks_s(x_conved)
 
+        # Output s using the output projection layer
+        s = self.out_proj_s(x)  
 
+        # Concatenate the input and s along dimension 2
+        concat_entry = torch.cat((copy_x, s), dim=2)
 
+        # Pass the concatenated input through the biMamba_plus stack
+        out_bimamba_plus = self.bi_mamba_plus(concat_entry)
+
+        # Output alpha_D_a using the output projection layer
+        alpha_d_a = self.out_proj_D_a(out_bimamba_plus)
+
+        # Concatenate alpha_D_a and s along dimension 2 as the final output
+        output = torch.cat((alpha_d_a, s), dim=2)
+
+        return output
 
 
 # Define a dataclass for the convolutional block
@@ -135,7 +166,7 @@ class convolutional_bloc(nn.Module):
         _, L, _ = x.size()  # B,L,D
 
         # Initialize the instance normalization layer
-        self.IN_norm = nn.InstanceNorm1d(L,device=self.config.device)
+        self.IN_norm = nn.InstanceNorm1d(L, device=self.config.device)
 
         # Save the initial input tensor
         residual = x  # B,L,D
@@ -156,7 +187,7 @@ class convolutional_bloc(nn.Module):
         x = F.leaky_relu(x)  # B,D,L
 
         # Add the initial input tensor
-        x = x + residual # B,D,L
+        x = x + residual  # B,D,L
 
         # Return the output tensor
         return x
@@ -168,6 +199,7 @@ class BiMamba(nn.Module):
         super().__init__()
         self.config = config
 
+        # Dynamically import Mamba module based on CUDA availability
         if torch.cuda.is_available():
             from mamba_ssm import Mamba
         else:
@@ -209,7 +241,7 @@ class BiMamba(nn.Module):
             nn.Linear(
                 self.config.d_model, self.config.d_model * self.config.expand_factor
             ),
-            nn.GELU(),
+            nn.ReLU(),
             nn.Linear(
                 self.config.d_model * self.config.expand_factor, self.config.d_model
             ),
@@ -249,13 +281,77 @@ class BiMamba(nn.Module):
         return y
 
 
+class Feed_foward(nn.Module):
+    def __init__(self, in_dim, hidden_dim, config):
+        # Initialize the feed-forward module with input dimension, hidden dimension, and configuration
+        super().__init__()
+        self.config = config
+        self.in_dim = in_dim
+        self.hidden_dim = hidden_dim
+
+        # Define the feed-forward network as a sequence of linear and ReLU layers
+        self.net = nn.Sequential(
+            # Linear layer with input dimension, hidden dimension, and default initialization
+            nn.Linear(self.in_dim, self.hidden_dim),
+            # ReLU activation function
+            nn.ReLU(),
+            # Linear layer with hidden dimension, input dimension, and default initialization
+            nn.Linear(self.hidden_dim, self.in_dim),
+        ).to(device=self.config.device)
+
+    def forward(self, x):
+        # Define the forward pass through the feed-forward module
+        return self.net(x)
+
+class Bi_mamba_plus(nn.Module):
+    def __init__(self, config: EmetConfig):
+        # Initialize the Bi_mamba_plus module with a given configuration
+        super().__init__()
+        self.config = copy(config)
+
+        # Update the model dimensions by adding 1 to d_model and calculating d_inner
+        self.config.d_model = self.config.d_model + 1  # adding s
+        self.config.d_inner = self.config.d_model * self.config.expand_factor
+
+        # Initialize the feed-forward module with d_model, d_inner, and config
+        self.feed_forward = Feed_foward(
+            self.config.d_model, self.config.d_inner, self.config
+        )
+
+        # Initialize the BiMamba module with the updated config and move it to the specified device
+        self.bi_mamba = BiMamba(self.config).to(device=self.config.device)
+
+        # Initialize a dropout module with the specified dropout probability and move it to the specified device
+        self.dropout = nn.Dropout(p=self.config.dropout).to(self.config.device)
+
+        # Initialize an instance normalization module with L dimensions and move it to the specified device
+        self.normalization = nn.InstanceNorm1d(L, device=self.config.device)
+
+    def forward(self, x):
+        # Define the forward pass through the Bi_mamba_plus module
+        residual = x
+
+        # Pass the input through the BiMamba module
+        x = self.bi_mamba(x)
+
+        # Apply dropout to the output and add the residual
+        x = self.dropout(x + residual)
+
+        # Pass the output through the feed-forward module
+        x = self.feed_forward(x)
+
+        return x
+
+
 if __name__ == "__main__":
 
     B, L, D = 40, 100, 3
-    x = torch.randn(B, L, D).to("cuda")
     config = EmetConfig(D, L)
-    model = convolutional_bloc(config)
+    x = torch.randn(B, L, D).to(config.device)
+    model = EmetMamba(config)
 
     y = model(x)
+    print(x.size())
+    print(y.size())
 
-    assert y.size() == x.size()
+    # assert y.size() == x.size()
