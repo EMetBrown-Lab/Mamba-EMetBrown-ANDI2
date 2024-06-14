@@ -57,9 +57,8 @@ class Bi_mamba_plus(nn.Module):
         super().__init__()
         self.config = copy(config)
 
-        # self.config.d_model = self.config.d_model   # adding s
-        # self.config.d_inner = self.config.d_model * self.config.expand_factor
-
+        self.config.d_model = self.config.d_model + 1   # adding s
+        self.config.d_inner = self.config.d_model * self.config.expand_factor
         self.feed_forward = Feed_foward(
             self.config.d_model, self.config.d_inner, self.config
         )
@@ -71,15 +70,11 @@ class Bi_mamba_plus(nn.Module):
         self.normalization = nn.InstanceNorm1d(self.config.d_model, device=self.config.device)
 
     def forward(self, x):
-
         residual = x
 
         x = self.bi_mamba(x)
-
         x = self.dropout(x + residual)
-
         x = self.feed_forward(x)
-
         return x
 
 # Define a dataclass for the EmetMamba model
@@ -99,33 +94,33 @@ class EmetMamba(nn.Module):
         if self.config.dt_rank == "auto":
             self.config.dt_rank = math.ceil(self.d_model / 16)
 
-        # self._convolutional_stack()
+        self._convolutional_stack()
         self._bi_mamba_stacks()
 
-        # self.out_proj_s = nn.Sequential(
-        #     Feed_foward(
-        #         self.config.d_model,
-        #         self.config.d_inner,
-        #         self.config,
-        #     ),
-        #     nn.Linear(self.config.d_model, 4, bias=False),
-        # ).to(self.config.device)
+        self.out_proj_s = nn.Sequential(
+            Feed_foward(
+                self.config.d_model,
+                self.config.d_inner,
+                self.config,
+            ),
+            nn.Linear(self.config.d_model, 4, bias=False),
+        ).to(self.config.device)
 
         self.out_proj_D_a = nn.Sequential(
             Feed_foward(
-                self.config.d_model,
-                (self.config.d_model) * self.config.expand_factor,
+                self.config.d_model + 1,
+                (self.config.d_model + 1) * self.config.expand_factor,
                 self.config,
             ),
-            nn.Linear(self.config.d_model, 2, bias=False),
+            nn.Linear(self.config.d_model+ 1, 2, bias=False),
         ).to(self.config.device)
 
     # Define the convolutional stack
     def _convolutional_stack(self):
 
-        # self.convolutional_stack_input = nn.Sequential(
-        #     *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
-        # ).to(self.config.device)
+        self.convolutional_stack_input = nn.Sequential(
+            *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
+        ).to(self.config.device)
 
         self.convolutional_stack_alpha_D = nn.Sequential(
             *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
@@ -134,9 +129,9 @@ class EmetMamba(nn.Module):
     # Define the biMamba stacks
     def _bi_mamba_stacks(self):
 
-        # self.bi_mamba_stacks_s = nn.Sequential(
-        #     *[BiMamba(self.config) for _ in range(self.config.bi_mamba_stacks)]
-        # )
+        self.bi_mamba_stacks_s = nn.Sequential(
+            *[BiMamba(self.config) for _ in range(self.config.bi_mamba_stacks)]
+        )
 
         self.bi_mamba_plus = nn.Sequential(
             *[Bi_mamba_plus(self.config) for _ in range(self.config.bi_mamba_stacks)]
@@ -150,22 +145,19 @@ class EmetMamba(nn.Module):
 
         # Making input pass through the convolutional stack
 
-        # x_conved = self.convolutional_stack_input(x)
-        # x = self.bi_mamba_stacks_s(x_conved) #
+        x_conved = self.convolutional_stack_input(x)
+        x = self.bi_mamba_stacks_s(x_conved) #
 
-        # s_probas = self.out_proj_s(x)  #  Here we should out put a (B,L,num_classes) output
+        s_probas = self.out_proj_s(x)  #  Here we should out put a (B,L,num_classes) output
 
         # return s_probas
-        # s = torch.argmax(torch.softmax(s_probas, dim = 2), dim=2) # getting the actual top probable classes
-        # s = s.unsqueeze(-1) # adding a dimension for the next step
+        s = torch.argmax(torch.softmax(s_probas, dim = 2), dim=2) # getting the actual top probable classes
+        s = s.unsqueeze(-1) # adding a dimension for the next step
 
-        # concat_entry = torch.cat((copy_x, s), dim=2)
-
-        out_bimamba_plus = self.bi_mamba_plus(x)
-
+        concat_entry = torch.cat((copy_x, s), dim=2)
+        out_bimamba_plus = self.bi_mamba_plus(concat_entry)
         alpha_d_a = self.out_proj_D_a(out_bimamba_plus)
-
-        return torch.relu(alpha_d_a)
+        return [s_probas, torch.relu(alpha_d_a)]
         # # Concat final ouput
 
         # # output = torch.cat((alpha_d_a, s), dim=2)
