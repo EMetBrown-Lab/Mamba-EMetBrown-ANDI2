@@ -161,3 +161,5 @@ cython_debug/
 ens*
 traj*
 trajs*
+
+public_data_validation_v1/

@@ -68,7 +68,7 @@ class EmetMamba(nn.Module):
         if self.config.dt_rank == "auto":
             self.config.dt_rank = math.ceil(self.d_model / 16)
 
-        self._convolutional_stack()
+        # self._convolutional_stack()
         self._bi_mamba_stacks()
 
         self.out_proj_s = nn.Sequential(
@@ -115,12 +115,12 @@ class EmetMamba(nn.Module):
     def forward(self, x):
 
         x = torch.flatten(x, start_dim=1, end_dim=2)
-        copy_x = x
+        # copy_x = x
 
         # Making input pass through the convolutional stack
 
-        x_conved = self.convolutional_stack_input(x)
-        x = self.bi_mamba_stacks_s(x_conved) #
+        # x_conved = self.convolutional_stack_input(x)
+        x = self.bi_mamba_stacks_s(x) #
 
         s_probas = self.out_proj_s(x)  #  Here we should out put a (B,L,num_classes) output
 
