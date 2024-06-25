@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from EmetMamba_classification import EmetConfig, EmetMamba
+from EmetMamba_alpha import EmetConfig, EmetMamba
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -51,12 +51,13 @@ def apply_padding(data_df, N, T_max):
     for n, id in enumerate(selected_ids):
         # Filter the data for the current trajectory index
         exp = data_df[data_df["traj_idx"] == id]
-
+        
         # Extract the data and labels for the current trajectory
         data = exp[["frame", "x", "y"]].to_numpy()
         # print(exp["frame"])
         label = exp[["alpha", "D", "state"]].to_numpy()
-
+        ## adding one to the states
+        label[:,2] = label[:,2] + 1
         # If the data is longer than T_max, truncate it
         if data.shape[0] > T_max:
             final_data[n, :, :] = data[:T_max, :]
@@ -172,14 +173,56 @@ class Dataset_all_data(Dataset):
             data = add_noise(data)
         
         # Normalize D between 0 and 1
-        label[:,:,1][label[:,:,1] != 0] = (np.log(label[:,:,1][label[:,:,1] != 0]) - np.log(1e-6)) /   (np.log(1e12) - np.log(1e-6))
+
+        # label[:,:,1][label[:,:,1] != 0] = np.log(label[:,:,1][label[:,:,1] != 0]) #- np.log(1e-6)) #/   (np.log(1e12) - np.log(1e-6))
+        # label = label[:,:,1]
+        label_regression = np.zeros((label.shape[0], 2))
+        # print(np.unique(label_2))
+        
+        for i in range(label.shape[0]):
+            Ds = np.unique(label[i,:,0][label[i,:,0] != 0])
+            if  len(Ds) == 2:
+                label_regression[i,:] = Ds
+
+                return torch.from_numpy(data.astype(np.float32)), (
+                    torch.from_numpy(label_regression.astype(np.float32)),
+                    torch.from_numpy(label_2.astype(np.float32)),
+                )
+
+            if len(Ds) == 1:
+                states = label_2[i,:]
+                if 1 in states:
+                    # print(np.unique(states))
+                    if states[0] == 1:
+                        label_regression[i,:] = [0, Ds[0]]
+                    else:
+                        label_regression[i,:] = [Ds[0], 0]
+                    
+                    # print(label_regression[i,:])
+
+                else:
+                    label_regression[i,:] = [Ds[0],Ds[0]] 
+
+            else:
+                if  np.unique(label[i,:,1]) == 0:
+                    label_regression[i,:] = [0,0]
+                else :
+
+                    # print(np.unique(label[i,:,1]))
+
+                    # print(Ds)
+                    raise Exception("more than 2 diffusions")
 
         # Normaliza alpha between 0 and 1
-        label[:,:,0] = label[:,:,0] / 2
+        # label[:,:,0] = label[:,:,0] / 2
 
+        #return only D
+        label = label[:,:,1]
         # Return data and label
+
+
         return torch.from_numpy(data.astype(np.float32)), (
-            torch.from_numpy(label.astype(np.float32)),
+            torch.from_numpy(label_regression.astype(np.float32)),
             torch.from_numpy(label_2.astype(np.float32)),
         )
     
@@ -192,12 +235,12 @@ def add_noise(data):
 def train(a):
 
     all_data_set = list_directory_tree_with_pathlib(
-    r"/home/m.lavaud/Documents/Zeus/I2/T_200_const_100_to_150/batch_T_Const_1",)#[:9000]
+    r"/home/m.lavaud/Documents/Zeus/I2/T_200_const_100_to_150/batch_T_Const_1",)
 
     bi_mamba_stacks, dropout, learning_rate, n_layer = a
 
     learning_rate = learning_rate
-    max_epochs = 5
+    max_epochs = 6
     max_particles = 20
     max_traj_len = 200
     
@@ -213,7 +256,7 @@ def train(a):
     
     config = EmetConfig(
         d_model=3,
-        n_layers=n_layer,
+        n_layers=16,
         dt_rank="auto",
         d_state=16,
         expand_factor=2,
@@ -229,7 +272,7 @@ def train(a):
         pscan=True,
         use_cuda=True,
         bi_mamba_stacks=bi_mamba_stacks,
-        conv_stack=1,
+        conv_stack=n_layer,
         dropout=dropout,
     )
     model = EmetMamba(config=config)
@@ -245,13 +288,13 @@ def train(a):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     # Training loop
     running_test_loss = []
+  
     
     
-    regression_criterion = nn.MSELoss()
+    regression_criterion = nn.L1Loss()
     
     for epoch in range(max_epochs):
         with tqdm(dataloader, unit="batch", disable=False) as tepoch:
-            
             running_classification_loss = []
             running_regression_loss = []
             model.train()
@@ -260,45 +303,66 @@ def train(a):
                 tepoch.set_description(f"Epoch {epoch}")
     
                 inputs = inputs.to("cuda")
-
-                classification_targets = torch.flatten(
-                    classification_targets, start_dim=1, end_dim=2
-                ).type(torch.LongTensor)
-                classification_targets = classification_targets.to("cuda")
+                # classification_targets = torch.flatten(
+                #     classification_targets, start_dim=1, end_dim=2
+                # ).type(torch.LongTensor)
+                # classification_targets = classification_targets.to("cuda")
     
+                regression_targets = torch.flatten(
+                    regression_targets, start_dim=1, end_dim=2
+                ).to("cuda")
 
                 optimizer.zero_grad()
 
-                classification_output = model(inputs)
+                regression_output = model(inputs)
     
-                # print(classification_output.size())
+                # regression_output = model(inputs)
+                # print(regression_output.size())
+                # print(regression_targets.size())
+                regression_output = torch.squeeze(regression_output)
+                # print(regression_output)s
+                # print(regression_targets)
 
-                classification_loss = classification_criterion(
-                    classification_output.view(-1, 4).to("cpu"),
-                    classification_targets.view(-1).to("cpu"),
+                regression_loss = regression_criterion(
+                    regression_output, regression_targets
                 )
 
-                classification_loss = classification_loss.to("cuda")
-                classification_loss.backward()
+                # classification_loss = classification_criterion(
+                #     classification_output.view(-1, 4).to("cpu"),
+                #     classification_targets.view(-1).to("cpu"),
+                # )
 
+                # classification_loss = classification_loss.to("cuda")
+                # total_loss =  regression_loss +classification_loss 
+                # total_loss.backward()
+                regression_loss.backward()
                 optimizer.step()
     
                 tepoch.set_postfix(
-                    loss=classification_loss.item(),
+                    # loss=total_loss.item(),
+                    loss=regression_loss.item(),
+                    # classification_loss=classification_loss.item(),
                 )
-                running_classification_loss.append(classification_loss.item())
+                # running_loss.append(total_loss.item())
+                # running_classification_loss.append(classification_loss.item())
+                running_regression_loss.append(regression_loss.item())
     
-            running_classification_total_loss.append(np.mean(running_classification_loss))
+            # running_total_loss.append(np.mean(running_loss))
+            # print(f"Epoch {epoch} Loss: {running_total_loss[-1]}")
+            # running_classification_total_loss.append(np.mean(running_classification_loss))
+            running_regression_total_loss.append(np.mean(running_regression_loss))
             
 
-            test_loss = evaluate_model(model,dataloader_test,classification_criterion)
+            test_loss = evaluate_model(model,dataloader_test,nn.L1Loss())
             running_test_loss.append(test_loss)
-
+            # running_regression_total_loss.appen)
     result = {"bi_mamba_stacks":bi_mamba_stacks,
               "n_layers":n_layer,
               "dropout":dropout,
               "learning_rate":learning_rate, 
-              "running_classification_total_loss":running_classification_total_loss,
+            #   "total_loss":running_total_loss, 
+            #   "running_classification_total_loss":running_classification_total_loss,
+              "running_regression_total_loss":running_regression_total_loss,
               "running_test_loss":running_test_loss
              }
     return result, model
@@ -310,25 +374,23 @@ def evaluate_model(model, dataloader, criterion, device = "cuda"):
     total_samples = 0
     with torch.no_grad():
         for batch in dataloader:
-            inputs, (_, targets) = batch
-            inputs = inputs.to(device)
+            inputs, (targets, _) = batch
+            inputs= inputs.to(device)
+                
             targets = torch.flatten(
                 targets, start_dim=1, end_dim=2
-            ).type(torch.LongTensor)            
+            ).to("cuda")
 
             outputs = model(inputs)
-            loss = criterion(
-                outputs.view(-1, 4).to("cpu"),
-                targets.view(-1).to("cpu"),
-            )
-            total_loss += loss.item() * inputs.size(0)
+            loss = criterion(torch.squeeze(outputs), targets)
+            total_loss += loss.item() 
             total_samples += inputs.size(0)
         return total_loss / total_samples
 
-class RMSLELoss(nn.Module):
+class MSLELoss(nn.Module):
     def __init__(self):
         super().__init__()
         self.mse = nn.MSELoss()
         
     def forward(self, pred, actual):
-        return torch.sqrt(self.mse(torch.log(pred + 1), torch.log(actual + 1)))
+        return (self.mse(torch.log(pred + 1), torch.log(actual + 1)))

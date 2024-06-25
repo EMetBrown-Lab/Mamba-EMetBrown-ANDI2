@@ -122,7 +122,9 @@ class EmetMamba(nn.Module):
             nn.Linear(self.config.d_model, 1, bias=False),
         ).to(self.config.device)
 
-        self.relu = nn.ReLU()
+
+        # self.softplus  = torch.nn.Softplus()
+        # self.relu = nn.ReLU()
 
     # Define the convolutional stack
     def _convolutional_stack(self):
@@ -148,9 +150,13 @@ class EmetMamba(nn.Module):
 
     # Define the forward pass
     def forward(self, x):
+        _, L,_, _ = x.size()
 
         x = torch.flatten(x, start_dim=1, end_dim=2)
+        _,L_in,_ = x.size()
         copy_x = x
+        
+        self.final_output = nn.Linear(L_in, 2*L).to(self.config.device)
 
         # Making input pass through the convolutional stack
 
@@ -169,12 +175,21 @@ class EmetMamba(nn.Module):
 
         alpha_d_a = self.out_proj_D_a(out_bimamba_plus)
 
+        alpha_d_a = alpha_d_a.permute(0,2,1)
+        alpha_d_a = self.final_output(alpha_d_a)
+        alpha_d_a = alpha_d_a.permute(0,2,1)
+
+
+        alpha_d_a = torch.exp(alpha_d_a)
+
+        # alpha_d_a = self.softplus(alpha_d_a)
+        # print(alpha_d_a)
         return alpha_d_a
         # # Concat final ouput
 
         # # output = torch.cat((alpha_d_a, s), dim=2)
 
-        # return [s_probas, alpha_d_a]
+        #return [s_probas, alpha_d_a]
 
 
 # Define a dataclass for the convolutional block
