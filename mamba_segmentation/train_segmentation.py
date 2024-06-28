@@ -149,7 +149,7 @@ class Dataset_all_data(Dataset):
         df = pd.read_csv(self.filenames[idx])
 
         if self.pad is None:
-            data = df[["traj_idx", "frame", "x", "y"]]
+            data = df[["traj_idx", "x", "y"]]
             label = np.asarray(df[["alpha", "D"]])
             label_2 = np.asarray(df["state"])
 
@@ -157,6 +157,8 @@ class Dataset_all_data(Dataset):
             if len(self.pad) != 2:
                 raise ValueError("pad value should be set as (N, T_max)")
             data, label = apply_padding(df, *self.pad)
+            data = data[:,:,1:] ## Removing the time 
+            # print(data.shape)
             label_2 = label[:, :, -1]
             label_2[label_2[:, :] > 0] = label_2[label_2[:, :] > 0] 
             label = label[:, :, :-1]
@@ -211,27 +213,21 @@ class Dataset_all_data(Dataset):
 
         ## Making the segmentation output
 
-        label_segmentation = np.zeros((label_2.shape[0], label_2.shape[1]))
+        label_segmentation = np.zeros((label_2.shape[0], label_2.shape[1])) - 1
 
 
 
         for i in range(label.shape[0]):
             if label_regression[i,0] == label_regression[i,1]:
                 position = label[i,:,1] == label_regression[i,0]
-                label_segmentation[i,position] = 1
+                label_segmentation[i,position] = 0
             else:
                 position_1 = label[i,:,1] == label_regression[i,0]
                 position_2 = label[i,:,1] == label_regression[i,1]
-                label_segmentation[i,position_1] = 1
-                label_segmentation[i,position_2] = 2
-
-        np.unique(label_segmentation[i,:])
+                label_segmentation[i,position_1] = 0
+                label_segmentation[i,position_2] = 1
 
         
-
-
-
-
         # Normaliza alpha between 0 and 1
         # label[:,:,0] = label[:,:,0] / 2
 
@@ -239,42 +235,41 @@ class Dataset_all_data(Dataset):
         # label = label[:,:,1]
         # Return data and label
 
-
         return torch.from_numpy(data.astype(np.float32)), (
             torch.from_numpy(label_regression.astype(np.float32)),
             torch.from_numpy(label_segmentation.astype(np.float32)),
         )
     
 def add_noise(data):
-    noise_amplitude = np.random.choice([0.01, 0.1, 1])
-    noise = np.random.normal(0, noise_amplitude, data[:,:,1:].shape)
-    data[:,:,1:] = data[:,:,1:] + data[:,:,1:]*noise
+    noise_amplitude = np.random.choice([0.01, 0.1,])
+    noise = np.random.normal(0, noise_amplitude, data[:,:,:].shape)
+    data[:,:,:] = data[:,:,1] + data[:,:,:]*noise
     return  data
 
 def train(a):
 
     all_data_set = list_directory_tree_with_pathlib(
-    r"/home/m.lavaud/Documents/Zeus/I2/T_200_const_100_to_150/batch_T_Const_1",)
-
+    r"/media/brownianxgames/Aquisitions/test_IA/batch_T_Const_1",)
+    np.random.shuffle(all_data_set)
     bi_mamba_stacks, dropout, learning_rate, n_layer = a
 
     learning_rate = learning_rate
-    max_epochs = 6
+    max_epochs = 10
     max_particles = 20
     max_traj_len = 200
     
     
     training_dataset = Dataset_all_data(
-        all_data_set[:2000], transform=False, pad=(max_particles, max_traj_len)
+        all_data_set[:8000], transform=False, pad=(max_particles, max_traj_len)
     )
     test_dataset = Dataset_all_data(
-        all_data_set[-100:], transform=False, pad=(max_particles, max_traj_len)
+        all_data_set[-2000:], transform=False, pad=(max_particles, max_traj_len)
     )
     dataloader = DataLoader(training_dataset, shuffle=True, batch_size=10, num_workers=0)
     dataloader_test = DataLoader(test_dataset, shuffle=True, batch_size=10, num_workers=0)
     
     config = EmetConfig(
-        d_model=3,
+        d_model=2,
         n_layers=16,
         dt_rank="auto",
         d_state=16,
@@ -298,7 +293,7 @@ def train(a):
     model.train()
     
 
-    classification_criterion = nn.CrossEntropyLoss(ignore_index=0)
+    
     # Define optimizer
     running_total_loss = []
     running_classification_total_loss = []
@@ -322,20 +317,33 @@ def train(a):
                 tepoch.set_description(f"Epoch {epoch}")
                 # print(torch.unique(classification_targets))
                 inputs = inputs.to("cuda")
+                inputs = torch.flatten(inputs, start_dim=0, end_dim=1)
+                # print(inputs.size())
                 # print(classification_targets)
                 classification_targets = torch.flatten(
                     classification_targets, start_dim=1, end_dim=2
                 ).type(torch.LongTensor)
                 classification_targets = classification_targets.to("cuda")
-    
+                # print(torch.sum(classification_targets == 2))
 
                 optimizer.zero_grad()
 
                 classification_output = model(inputs)
     
+                counts = torch.unique(classification_targets, return_counts=True)[1][1:]
+                # print(counts)
+                weights = torch.sum(counts) / (2 * counts)
+                weights = weights.to("cpu") # ignoring the first class
+                weight = torch.zeros(3)
+                weight[1:] = weights
+                # print(weights)
+                classification_criterion = nn.CrossEntropyLoss(ignore_index=-1, weight=weight)
+
+
+
                 # print(classification_output.size())
                 # print(classification_targets)
-
+                # print(torch.unique(classification_targets))
                 classification_loss = classification_criterion(
                     classification_output.view(-1, 3).to("cpu"),
                     classification_targets.view(-1).to("cpu"),
@@ -345,9 +353,14 @@ def train(a):
                 classification_loss.backward()
 
                 optimizer.step()
-    
+                
+
+                # print(torch.unique(classification_targets, return_counts=True)[0])
                 tepoch.set_postfix(
                     loss=classification_loss.item(),
+                    state0 = torch.sum(classification_targets == 0).item(),
+                    state1 = torch.sum(classification_targets == 1).item(),
+                   
                 )
                 running_classification_loss.append(classification_loss.item())
     
@@ -375,6 +388,7 @@ def evaluate_model(model, dataloader, criterion, device = "cuda"):
         for batch in dataloader:
             inputs, (_, targets) = batch
             inputs = inputs.to(device)
+            inputs = torch.flatten(inputs, start_dim=0, end_dim=1)
             targets = torch.flatten(
                 targets, start_dim=1, end_dim=2
             ).type(torch.LongTensor)            

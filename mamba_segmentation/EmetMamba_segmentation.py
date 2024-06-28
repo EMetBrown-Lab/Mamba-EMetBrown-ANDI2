@@ -114,7 +114,7 @@ class EmetMamba(nn.Module):
     # Define the forward pass
     def forward(self, x):
 
-        x = torch.flatten(x, start_dim=1, end_dim=2)
+        # x = torch.flatten(x, start_dim=1, end_dim=2)
         # copy_x = x
 
         # Making input pass through the convolutional stack

@@ -157,6 +157,7 @@ class Dataset_all_data(Dataset):
             if len(self.pad) != 2:
                 raise ValueError("pad value should be set as (N, T_max)")
             data, label = apply_padding(df, *self.pad)
+            data = data[:,:,1:] ## Removing the frame column
             label_2 = label[:, :, -1]
             label_2[label_2[:, :] > 0] = label_2[label_2[:, :] > 0] 
             label = label[:, :, :-1]
@@ -227,26 +228,26 @@ class Dataset_all_data(Dataset):
         )
     
 def add_noise(data):
-    noise_amplitude = np.random.choice([0.01, 0.1, 1])
-    noise = np.random.normal(0, noise_amplitude, data[:,:,1:].shape)
-    data[:,:,1:] = data[:,:,1:] + data[:,:,1:]*noise
+    noise_amplitude = np.random.choice([0.01, 0.1,])
+    noise = np.random.normal(0, noise_amplitude, data[:,:,:].shape)
+    data[:,:,1:] = data[:,:,:] + data[:,:,:]*noise
     return  data
 
 def train(a):
 
     all_data_set = list_directory_tree_with_pathlib(
-    r"/home/m.lavaud/Documents/Zeus/I2/T_200_const_100_to_150/batch_T_Const_1",)
-
+    r"/media/brownianxgames/Aquisitions/test_IA/batch_T_Const_1",)
+    np.random.shuffle(all_data_set)
     bi_mamba_stacks, dropout, learning_rate, n_layer = a
 
     learning_rate = learning_rate
-    max_epochs = 6
+    max_epochs = 10
     max_particles = 20
     max_traj_len = 200
     
     
     training_dataset = Dataset_all_data(
-        all_data_set[:500], transform=False, pad=(max_particles, max_traj_len)
+        all_data_set[:8000], transform=False, pad=(max_particles, max_traj_len)
     )
     test_dataset = Dataset_all_data(
         all_data_set[-100:], transform=False, pad=(max_particles, max_traj_len)
@@ -255,7 +256,7 @@ def train(a):
     dataloader_test = DataLoader(test_dataset, shuffle=True, batch_size=10, num_workers=0)
     
     config = EmetConfig(
-        d_model=3,
+        d_model=2,
         n_layers=16,
         dt_rank="auto",
         d_state=16,
@@ -279,7 +280,7 @@ def train(a):
     model.train()
     
 
-    classification_criterion = nn.CrossEntropyLoss()
+    # classification_criterion = nn.CrossEntropyLoss(ignore_index=0)
     # Define optimizer
     running_total_loss = []
     running_classification_total_loss = []
@@ -303,19 +304,23 @@ def train(a):
                 tepoch.set_description(f"Epoch {epoch}")
     
                 inputs = inputs.to("cuda")
+                #flatting batch and trajectories for batch beeing the total trajectory number.
+                inputs = torch.flatten(inputs, start_dim=0, end_dim=1)
+                
                 # classification_targets = torch.flatten(
                 #     classification_targets, start_dim=1, end_dim=2
                 # ).type(torch.LongTensor)
                 # classification_targets = classification_targets.to("cuda")
-    
+              
                 regression_targets = torch.flatten(
-                    regression_targets, start_dim=1, end_dim=2
+                    regression_targets, start_dim=0, end_dim=1
                 ).to("cuda")
 
+                
+                
                 optimizer.zero_grad()
 
                 regression_output = model(inputs)
-    
                 # regression_output = model(inputs)
                 # print(regression_output.size())
                 # print(regression_targets.size())
@@ -376,9 +381,10 @@ def evaluate_model(model, dataloader, criterion, device = "cuda"):
         for batch in dataloader:
             inputs, (targets, _) = batch
             inputs= inputs.to(device)
+            inputs = torch.flatten(inputs, start_dim=0, end_dim=1)
                 
             targets = torch.flatten(
-                targets, start_dim=1, end_dim=2
+                targets, start_dim=0, end_dim=1
             ).to("cuda")
 
             outputs = model(inputs)
