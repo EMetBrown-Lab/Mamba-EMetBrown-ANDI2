@@ -103,6 +103,12 @@ class EmetMamba(nn.Module):
 
         # self._convolutional_stack()
         self._bi_mamba_stacks()
+        # self.mamba = Mamba(
+        #     d_model=self.config.d_model,
+        #     d_state=self.config.n_layers,
+        #     d_conv=self.config.d_conv,
+        #     expand=self.config.expand_factor,
+        # ).to(self.config.device)
 
         # self.out_proj_s = nn.Sequential(
         #     Feed_foward(
@@ -124,7 +130,7 @@ class EmetMamba(nn.Module):
 
 
         # self.softplus  = torch.nn.Softplus()
-        # self.relu = nn.ReLU()
+        self.relu = nn.ReLU()
 
     # Define the convolutional stack
     def _convolutional_stack(self):
@@ -170,9 +176,8 @@ class EmetMamba(nn.Module):
         # s = s.unsqueeze(-1) # adding a dimension for the next step
 
         # concat_entry = torch.cat((copy_x, s), dim=2)
-
         out_bimamba_plus = self.bi_mamba_plus(x)
-
+        # out_bimamba_plus = self.mamba(x)
         alpha_d_a = self.out_proj_D_a(out_bimamba_plus)
 
         alpha_d_a = alpha_d_a.permute(0,2,1)
@@ -184,7 +189,7 @@ class EmetMamba(nn.Module):
         alpha_d_a = alpha_d_a
         # alpha_d_a = self.softplus(alpha_d_a)
         # print(alpha_d_a)
-        return alpha_d_a
+        return torch.sigmoid(alpha_d_a)*2
         # # Concat final ouput
 
         # # output = torch.cat((alpha_d_a, s), dim=2)

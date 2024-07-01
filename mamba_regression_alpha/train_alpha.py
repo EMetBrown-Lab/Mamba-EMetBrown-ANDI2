@@ -236,7 +236,7 @@ def add_noise(data):
 def train(a):
 
     all_data_set = list_directory_tree_with_pathlib(
-    r"/media/brownianxgames/Aquisitions/test_IA/batch_T_Const_1",)
+    r"/home/m.lavaud/Documents/Zeus/I2/T_200_const_100_to_150/batch_T_Const_1",)
     np.random.shuffle(all_data_set)
     bi_mamba_stacks, dropout, learning_rate, n_layer = a
 
@@ -247,7 +247,7 @@ def train(a):
     
     
     training_dataset = Dataset_all_data(
-        all_data_set[:8000], transform=False, pad=(max_particles, max_traj_len)
+        all_data_set[:2000], transform=False, pad=(max_particles, max_traj_len)
     )
     test_dataset = Dataset_all_data(
         all_data_set[-100:], transform=False, pad=(max_particles, max_traj_len)

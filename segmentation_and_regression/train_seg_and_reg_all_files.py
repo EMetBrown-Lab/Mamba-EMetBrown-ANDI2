@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from EmetMamba import EmetConfig, EmetMamba
+from EmetMamba_seg_and_regr import EmetConfig, EmetMamba
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -41,7 +41,9 @@ def apply_padding(data_df, N, T_max):
 
     # Select a random subset of trajectory indices
     if len(data_df["traj_idx"].unique()) < N:
-        selected_ids = data_df["traj_idx"].unique()
+        selected_ids = np.random.choice(
+            data_df["traj_idx"].unique(), size=N, replace=True
+        )
     else:
         selected_ids = np.random.choice(
             data_df["traj_idx"].unique(), size=N, replace=False
@@ -60,17 +62,30 @@ def apply_padding(data_df, N, T_max):
         label[:,2] = label[:,2] + 1
         # If the data is longer than T_max, truncate it
         if data.shape[0] > T_max:
+            ## set the initial position to 0
+            data[:,1] = data[:,1] - data[0,1]
+            data[:,2] = data[:,2] - data[0,2]
+
+            ## set initial time to 1
+            data[:,0] = data[:,0] - data[0,0] +1 
+            
             final_data[n, :, :] = data[:T_max, :]
             final_label[n, :, :] = label[:T_max, :]
 
         # Otherwise, pad the data to T_max
         else:
             # print((label.shape, T_max))
+            data[:,1] = data[:,1] - data[0,1]
+            data[:,2] = data[:,2] - data[0,2]
+            data[:,0] = data[:,0] - data[0,0] +1 
+
+            
             final_data[n, :data.shape[0], :] = data
             final_label[n, :data.shape[0], :] = label
 
     # Return the padded data and labels
     return final_data, final_label
+
 
 
 # Define a function to normalize data
@@ -157,7 +172,9 @@ class Dataset_all_data(Dataset):
             if len(self.pad) != 2:
                 raise ValueError("pad value should be set as (N, T_max)")
             data, label = apply_padding(df, *self.pad)
-            data = data[:,:,1:] ## Removing the frame column
+            for i in range(data.shape[0]):
+                data[i,:,0] = data[i,:,0] - data[i,0,0] + 1
+            # data[:,:,0] = data[:,:,0] - data[:,0,0] ## Removing the frame column
             label_2 = label[:, :, -1]
             label_2[label_2[:, :] > 0] = label_2[label_2[:, :] > 0] 
             label = label[:, :, :-1]
@@ -173,58 +190,55 @@ class Dataset_all_data(Dataset):
         if self.noise:
             data = add_noise(data)
         
-        # Normalize D between 0 and 1
+        # Get the couples of alpha and K
 
-        # label[:,:,1][label[:,:,1] != 0] = np.log(label[:,:,1][label[:,:,1] != 0]) #- np.log(1e-6)) #/   (np.log(1e12) - np.log(1e-6))
-        # label = label[:,:,1]
-        label_regression = np.zeros((label.shape[0], 2))
-        # print(np.unique(label_2))
-        
+        label_alpha = np.zeros((label.shape[0], 2))
+        label_K = np.zeros((label.shape[0] ,2))
         for i in range(label.shape[0]):
-            Ds = np.unique(label[i,:,1][label[i,:,1] != 0])
-            if  len(Ds) == 2:
-                label_regression[i,:] = Ds
+            alpha = np.unique(label[i,:,0][label[i,:,0] != 0])
+            Ks = np.unique(label[i,:,1][label[i,:,1] != 0])
+            if  len(alpha) == 2:
+                label_alpha[i,:] = alpha
+                label_K[i,:] = Ks
 
-                return torch.from_numpy(data.astype(np.float32)), (
-                    torch.from_numpy(label_regression.astype(np.float32)),
-                    torch.from_numpy(label_2.astype(np.float32)),
-                )
-
-            if len(Ds) == 1:
+            elif len(alpha) == 1:
                 states = label_2[i,:]
                 if 1 in states:
-                    # print(np.unique(states))
                     if states[0] == 1:
-                        label_regression[i,:] = [0, Ds[0]]
+                        label_alpha[i,:] = [0, alpha[0]]
+                        label_K[i,:] = [0, Ks[0]]
                     else:
-                        label_regression[i,:] = [Ds[0], 0]
-                    
-                    # print(label_regression[i,:])
-
+                        label_alpha[i,:] = [alpha[0], 0]
+                        label_K[i,:] = [Ks[0], 0]
                 else:
-                    label_regression[i,:] = [Ds[0],Ds[0]] 
-
+                    label_alpha[i,:] = [alpha[0],alpha[0]] 
+                    label_K[i,:] = [Ks[0],Ks[0]] 
             else:
                 if  np.unique(label[i,:,1]) == 0:
-                    label_regression[i,:] = [0,0]
+                    label_alpha[i,:] = [0,0]
+                    label_K[i,:] = [0,0]
                 else :
-
-                    # print(np.unique(label[i,:,1]))
-
-                    # print(Ds)
                     raise Exception("more than 2 diffusions")
 
-        # Normaliza alpha between 0 and 1
-        # label[:,:,0] = label[:,:,0] / 2
+        ## Making the segmentation output
 
-        #return only D
-        label = label[:,:,1]
-        # Return data and label
+        label_segmentation = np.zeros((label_2.shape[0], label_2.shape[1]))
 
 
+        for i in range(label.shape[0]):
+            if label_alpha[i,0] == label_alpha[i,1]:
+                position = label[i,:,0] == label_alpha[i,0]
+                label_segmentation[i,position] = 1
+            else:
+                position_1 = label[i,:,0] == label_alpha[i,0]
+                position_2 = label[i,:,0] == label_alpha[i,1]
+                label_segmentation[i,position_1] = 1
+                label_segmentation[i,position_2] = 2
+        
         return torch.from_numpy(data.astype(np.float32)), (
-            torch.from_numpy(label_regression.astype(np.float32)),
-            torch.from_numpy(label_2.astype(np.float32)),
+            torch.from_numpy(label_alpha.astype(np.float32)),
+            torch.from_numpy(label_K.astype(np.float32)),
+            torch.from_numpy(label_segmentation.astype(np.float32)),
         )
     
 def add_noise(data):
@@ -236,18 +250,18 @@ def add_noise(data):
 def train(a):
 
     all_data_set = list_directory_tree_with_pathlib(
-    r"/media/brownianxgames/Aquisitions/test_IA/batch_T_Const_1",)
+    r"/media/brownianxgames/Aquisitions/test_IA/data",)
     np.random.shuffle(all_data_set)
     bi_mamba_stacks, dropout, learning_rate, n_layer = a
 
     learning_rate = learning_rate
-    max_epochs = 10
+    max_epochs = 30
     max_particles = 20
     max_traj_len = 200
     
     
     training_dataset = Dataset_all_data(
-        all_data_set[:8000], transform=False, pad=(max_particles, max_traj_len)
+        all_data_set, transform=False, pad=(max_particles, max_traj_len)
     )
     test_dataset = Dataset_all_data(
         all_data_set[-100:], transform=False, pad=(max_particles, max_traj_len)
@@ -256,13 +270,13 @@ def train(a):
     dataloader_test = DataLoader(test_dataset, shuffle=True, batch_size=10, num_workers=0)
     
     config = EmetConfig(
-        d_model=2,
+        d_model=3,
         n_layers=16,
         dt_rank="auto",
         d_state=16,
         expand_factor=2,
         d_conv=4,
-        dt_min=0.001,
+        dt_min=0.01,
         dt_max=0.1,
         dt_init="random",
         dt_scale=1.0,
@@ -290,16 +304,20 @@ def train(a):
     # Training loop
     running_test_loss = []
   
+    running_alpha_total_loss = []
+    running_K_total_loss = []
+    running_segmentation_total_loss = []
     
-    
-    regression_criterion = MSLELoss()
+    regression_criterion_alpha = torch.nn.L1Loss()
+    regression_criterion_K = MSLELoss()
     
     for epoch in range(max_epochs):
         with tqdm(dataloader, unit="batch", disable=False) as tepoch:
-            running_classification_loss = []
-            running_regression_loss = []
+            running_alpha_loss = []
+            running_K_loss = []
+            running_segmentation_loss = []
             model.train()
-            for inputs, (regression_targets, classification_targets) in tepoch:
+            for inputs, (alpha_targets, K_targets, segmentation_targets) in tepoch:
             # for inputs, classification_targets in tepoch:
                 tepoch.set_description(f"Epoch {epoch}")
     
@@ -307,68 +325,81 @@ def train(a):
                 #flatting batch and trajectories for batch beeing the total trajectory number.
                 inputs = torch.flatten(inputs, start_dim=0, end_dim=1)
                 
-                # classification_targets = torch.flatten(
-                #     classification_targets, start_dim=1, end_dim=2
-                # ).type(torch.LongTensor)
-                # classification_targets = classification_targets.to("cuda")
-              
-                regression_targets = torch.flatten(
-                    regression_targets, start_dim=0, end_dim=1
+ 
+                alpha_targets = torch.flatten(
+                    alpha_targets, start_dim=0, end_dim=1
                 ).to("cuda")
 
+                K_targets = torch.flatten(
+                    K_targets, start_dim=0, end_dim=1
+                ).to("cuda")
                 
+                segmentation_targets = torch.flatten(
+                    segmentation_targets, start_dim=0, end_dim=1
+                ).type(torch.LongTensor)
+                
+                segmentation_targets = segmentation_targets.to("cuda")
+
+
+                # Managing the weight of the cross entropy loss
+
+                counts = torch.unique(segmentation_targets, return_counts=True)[1][1:]
+                
+                weights = torch.sum(counts) / (2 * counts)
+                weights = weights.to("cpu") # ignoring the first class
+                weight = torch.zeros(3)
+                weight[1:] = weights
+                classification_criterion = nn.CrossEntropyLoss(weight=weight, ignore_index=0)
+
+
+                segmentation_probas, alpha_output, K_output = model(inputs)
+                
+
+                segmentation_loss = classification_criterion(
+                    segmentation_probas.view(-1, 3).to("cpu"),
+                    segmentation_targets.view(-1).to("cpu"),
+                ).to("cuda")
+
+                ## Computing the alpha loss 
+
+                alpha_output = torch.squeeze(alpha_output)
+                alpha_loss = regression_criterion_alpha(
+                    alpha_output, alpha_targets
+                )
+                
+                K_output = torch.squeeze(K_output)
+                K_loss = regression_criterion_K(
+                    K_output, K_targets
+                )             
+
+                total_loss = alpha_loss + K_loss + segmentation_loss
                 
                 optimizer.zero_grad()
-
-                regression_output = model(inputs)
-                # regression_output = model(inputs)
-                # print(regression_output.size())
-                # print(regression_targets.size())
-                regression_output = torch.squeeze(regression_output)
-                # print(regression_output)s
-                # print(regression_targets)
-
-                regression_loss = regression_criterion(
-                    regression_output, regression_targets
-                )
-
-                # classification_loss = classification_criterion(
-                #     classification_output.view(-1, 4).to("cpu"),
-                #     classification_targets.view(-1).to("cpu"),
-                # )
-
-                # classification_loss = classification_loss.to("cuda")
-                # total_loss =  regression_loss +classification_loss 
-                # total_loss.backward()
-                regression_loss.backward()
+                total_loss.backward()
                 optimizer.step()
     
                 tepoch.set_postfix(
-                    # loss=total_loss.item(),
-                    loss=regression_loss.item(),
-                    # classification_loss=classification_loss.item(),
+                    K=K_loss.item(),
+                    alpha=alpha_loss.item(),
+                    seg=segmentation_loss.item(),
                 )
-                # running_loss.append(total_loss.item())
-                # running_classification_loss.append(classification_loss.item())
-                running_regression_loss.append(regression_loss.item())
+                running_alpha_loss.append(alpha_loss.item())
+                running_K_loss.append(K_loss.item())
+                running_segmentation_loss.append(segmentation_loss.item())
     
-            # running_total_loss.append(np.mean(running_loss))
-            # print(f"Epoch {epoch} Loss: {running_total_loss[-1]}")
-            # running_classification_total_loss.append(np.mean(running_classification_loss))
-            running_regression_total_loss.append(np.mean(running_regression_loss))
-            
 
-            test_loss = evaluate_model(model,dataloader_test,MSLELoss())
-            running_test_loss.append(test_loss)
-            # running_regression_total_loss.appen)
+            running_alpha_total_loss.append(np.mean(running_alpha_loss))
+            running_K_total_loss.append(np.mean(running_K_loss))
+            running_segmentation_total_loss.append(np.mean(running_segmentation_loss))
+
+
     result = {"bi_mamba_stacks":bi_mamba_stacks,
               "n_layers":n_layer,
               "dropout":dropout,
               "learning_rate":learning_rate, 
-            #   "total_loss":running_total_loss, 
-            #   "running_classification_total_loss":running_classification_total_loss,
-              "running_regression_total_loss":running_regression_total_loss,
-              "running_test_loss":running_test_loss
+              "running_K_total_loss":running_K_total_loss,
+              "running_segmentation_total_loss":running_segmentation_total_loss,
+              "running_alpha_total_loss":running_alpha_total_loss,
              }
     return result, model
 

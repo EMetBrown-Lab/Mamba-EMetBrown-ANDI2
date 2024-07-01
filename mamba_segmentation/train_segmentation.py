@@ -213,19 +213,18 @@ class Dataset_all_data(Dataset):
 
         ## Making the segmentation output
 
-        label_segmentation = np.zeros((label_2.shape[0], label_2.shape[1])) - 1
-
+        label_segmentation = np.zeros((label_2.shape[0], label_2.shape[1]))
 
 
         for i in range(label.shape[0]):
             if label_regression[i,0] == label_regression[i,1]:
                 position = label[i,:,1] == label_regression[i,0]
-                label_segmentation[i,position] = 0
+                label_segmentation[i,position] = 1
             else:
                 position_1 = label[i,:,1] == label_regression[i,0]
                 position_2 = label[i,:,1] == label_regression[i,1]
-                label_segmentation[i,position_1] = 0
-                label_segmentation[i,position_2] = 1
+                label_segmentation[i,position_1] = 1
+                label_segmentation[i,position_2] = 2
 
         
         # Normaliza alpha between 0 and 1
@@ -242,8 +241,8 @@ class Dataset_all_data(Dataset):
     
 def add_noise(data):
     noise_amplitude = np.random.choice([0.01, 0.1,])
-    noise = np.random.normal(0, noise_amplitude, data[:,:,:].shape)
-    data[:,:,:] = data[:,:,1] + data[:,:,:]*noise
+    noise = np.random.normal(0, noise_amplitude, data[:,:,1:].shape)
+    data[:,:,1:] = data[:,:,1:] + data[:,:,1:]*noise
     return  data
 
 def train(a):
@@ -254,16 +253,16 @@ def train(a):
     bi_mamba_stacks, dropout, learning_rate, n_layer = a
 
     learning_rate = learning_rate
-    max_epochs = 10
+    max_epochs = 4
     max_particles = 20
     max_traj_len = 200
     
     
     training_dataset = Dataset_all_data(
-        all_data_set[:8000], transform=False, pad=(max_particles, max_traj_len)
+        all_data_set[:2000], transform=False, noise=True, pad=(max_particles, max_traj_len)
     )
     test_dataset = Dataset_all_data(
-        all_data_set[-2000:], transform=False, pad=(max_particles, max_traj_len)
+        all_data_set[-10:], transform=False,noise=False, pad=(max_particles, max_traj_len)
     )
     dataloader = DataLoader(training_dataset, shuffle=True, batch_size=10, num_workers=0)
     dataloader_test = DataLoader(test_dataset, shuffle=True, batch_size=10, num_workers=0)
@@ -336,8 +335,10 @@ def train(a):
                 weights = weights.to("cpu") # ignoring the first class
                 weight = torch.zeros(3)
                 weight[1:] = weights
+                # print(weight)
+                # weight[1] = weight[1] / 10
                 # print(weights)
-                classification_criterion = nn.CrossEntropyLoss(ignore_index=-1, weight=weight)
+                classification_criterion = nn.CrossEntropyLoss(weight=weight, ignore_index=0)
 
 
 
@@ -367,15 +368,15 @@ def train(a):
             running_classification_total_loss.append(np.mean(running_classification_loss))
             
 
-            test_loss = evaluate_model(model,dataloader_test,classification_criterion)
-            running_test_loss.append(test_loss)
+            # test_loss = evaluate_model(model,dataloader_test,classification_criterion)
+            # running_test_loss.append(test_loss)
 
     result = {"bi_mamba_stacks":bi_mamba_stacks,
               "n_layers":n_layer,
               "dropout":dropout,
               "learning_rate":learning_rate, 
               "running_classification_total_loss":running_classification_total_loss,
-              "running_test_loss":running_test_loss
+              # "running_test_loss":running_test_loss
              }
     return result, model
 

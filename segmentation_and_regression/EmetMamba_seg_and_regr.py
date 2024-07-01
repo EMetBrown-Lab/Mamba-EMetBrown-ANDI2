@@ -50,6 +50,39 @@ class EmetConfig:
         if self.dt_rank == "auto":
             self.dt_rank = math.ceil(self.d_model / 16)
 
+        
+
+
+class Bi_mamba_plus(nn.Module):
+
+    def __init__(self, config: EmetConfig):
+        super().__init__()
+        self.config = copy(config)
+
+        # self.config.d_model = self.config.d_model   # adding s
+        # self.config.d_inner = self.config.d_model * self.config.expand_factor
+
+        self.feed_forward = Feed_foward(
+            self.config.d_model, self.config.d_inner, self.config
+        )
+
+        self.bi_mamba = BiMamba(self.config).to(device=self.config.device)
+
+        self.dropout = nn.Dropout(p=self.config.dropout).to(self.config.device)
+
+        self.normalization = nn.InstanceNorm1d(self.config.d_model, device=self.config.device)
+
+    def forward(self, x):
+
+        residual = x
+
+        x = self.bi_mamba(x)
+
+        x = self.dropout(residual) + x
+
+        x = self.feed_forward(x)
+
+        return x
 
 # Define a dataclass for the EmetMamba model
 @dataclass(eq=False)
@@ -80,25 +113,45 @@ class EmetMamba(nn.Module):
             nn.Linear(self.config.d_model, 3, bias=False),
         ).to(self.config.device)
 
-        # self.out_proj_D_a = nn.Sequential(
-        #     Feed_foward(
-        #         self.config.d_model + 1,
-        #         (self.config.d_model + 1) * self.config.expand_factor,
-        #         self.config,
-        #     ),
-        #     nn.Linear(self.config.d_model + 1, 2, bias=False),
+        self.out_proj_alpha= nn.Sequential(
+            Feed_foward(
+                self.config.d_model,
+                (self.config.d_model) * self.config.expand_factor,
+                self.config,
+            ),
+            # nn.Linear(self.config.d_model, 2, bias=False),
+        ).to(self.config.device)
+
+        self.out_proj_K= nn.Sequential(
+            Feed_foward(
+                self.config.d_model,
+                (self.config.d_model) * self.config.expand_factor,
+                self.config,
+            ),
+            # nn.Linear(self.config.d_model, 2, bias=False),
+        ).to(self.config.device)
+        # self.softplus  = torch.nn.Softplus()
+     
+        # Initialize two Mamba modules for forward and backward passes
+
+
+        # self.backward_mamba = Mamba(
+        #     d_model=self.config.d_model,
+        #     d_state=self.config.n_layers,
+        #     d_conv=self.config.d_conv,
+        #     expand=self.config.expand_factor,
         # ).to(self.config.device)
 
     # Define the convolutional stack
     def _convolutional_stack(self):
 
-        self.convolutional_stack_input = nn.Sequential(
-            *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
-        ).to(self.config.device)
-
-        # self.convolutional_stack_alpha_D = nn.Sequential(
+        # self.convolutional_stack_input = nn.Sequential(
         #     *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
         # ).to(self.config.device)
+
+        self.convolutional_stack_alpha_D = nn.Sequential(
+            *[convolutional_bloc(self.config) for _ in range(self.config.conv_stack)]
+        ).to(self.config.device)
 
     # Define the biMamba stacks
     def _bi_mamba_stacks(self):
@@ -107,39 +160,65 @@ class EmetMamba(nn.Module):
             *[BiMamba(self.config) for _ in range(self.config.bi_mamba_stacks)]
         )
 
-        # self.bi_mamba_plus = nn.Sequential(
-        #     *[Bi_mamba_plus(self.config) for _ in range(self.config.bi_mamba_stacks)]
-        # )
+        self.bi_mamba_plus_alpha = nn.Sequential(
+            *[Bi_mamba_plus(self.config) for _ in range(self.config.bi_mamba_stacks)]
+        )
 
+        self.bi_mamba_plus_K = nn.Sequential(
+            *[Bi_mamba_plus(self.config) for _ in range(self.config.bi_mamba_stacks)]
+        )
     # Define the forward pass
     def forward(self, x):
+        _,L, _ = x.size()
 
         # x = torch.flatten(x, start_dim=1, end_dim=2)
-        # copy_x = x
+        # _,L_in,_ = x.size()
+        copy_x = x
+        
+        self.final_output_alpha = nn.Linear(L,1).to(self.config.device)
+        self.final_output2_alpha = nn.Linear(3,2).to(self.config.device)
 
+        self.final_output_K = nn.Linear(L,1).to(self.config.device)
+        self.final_output2_K = nn.Linear(3,2).to(self.config.device)
         # Making input pass through the convolutional stack
 
         # x_conved = self.convolutional_stack_input(x)
+        # x = self.bi_mamba_stacks_s(x_conved) #
+
         x = self.bi_mamba_stacks_s(x) #
 
         s_probas = self.out_proj_s(x)  #  Here we should out put a (B,L,num_classes) output
 
-        return s_probas
-        # s = torch.argmax(torch.softmax(s_probas, dim = 2), dim=2) # getting the actual top probable classes
-        # s = s.unsqueeze(-1) # adding a dimension for the next step
+        # return s_probas
+        s = torch.argmax(torch.softmax(s_probas, dim = 2), dim=2) # getting the actual top probable classes
+        # Here we need to make the s values to 0 where to position is equal to 0
+        
+        s[copy_x[:,:,0] == 0] = 0
+        s = s.unsqueeze(-1) # adding a dimension for the next step
+        concat_entry = torch.cat((s, copy_x[:,:,1:]), dim=2)
 
-        # concat_entry = torch.cat((copy_x, s), dim=2)
+        # print(concat_entry.size())
+        # print(concat_entry[:,:,0])
+        ## The alpha model
+        out_bimamba_plus_alpha = self.bi_mamba_plus_alpha(concat_entry)
+        alpha = self.out_proj_alpha(out_bimamba_plus_alpha)
+        alpha = alpha.permute(0,2,1)
+        alpha = self.final_output_alpha(alpha)
+        alpha = torch.squeeze(alpha)
+        alpha = self.final_output2_alpha(alpha)
+        alpha = torch.sigmoid(alpha) * 2
 
-        # out_bimamba_plus = self.bi_mamba_plus(concat_entry)
+        ## The K model
+        out_bimamba_plus_K = self.bi_mamba_plus_K(concat_entry)
+        K = self.out_proj_K(out_bimamba_plus_alpha)
+        K = K.permute(0,2,1)
+        K = self.final_output_K(K)
+        K = torch.squeeze(K)
+        K = self.final_output2_K(K)
+        K = torch.exp(K)
 
-        # alpha_d_a = self.out_proj_D_a(out_bimamba_plus)
 
-        # # Concat final ouput
-
-        # # output = torch.cat((alpha_d_a, s), dim=2)
-
-        # return [s_probas, alpha_d_a]
-
+        return s_probas, alpha, K
 
 # Define a dataclass for the convolutional block
 @dataclass(eq=False)
@@ -207,7 +286,7 @@ class BiMamba(nn.Module):
         if torch.cuda.is_available():
             from mamba_ssm import Mamba
         else:
-            from Mamba import Mamba
+            from mamba import Mamba
 
         # Initialize two Mamba modules for forward and backward passes
         self.forward_mamba = Mamba(
@@ -264,7 +343,7 @@ class BiMamba(nn.Module):
 
         # Forward branch
         y_forward_mamba = self.forward_mamba(x)
-        y_forward_mamba = self.dropout(y_forward_mamba + residual)
+        y_forward_mamba = y_forward_mamba + self.dropout(residual)
         y_forward_mamba = self.forward_norm(y_forward_mamba)
 
         # Backward branch
@@ -284,7 +363,8 @@ class BiMamba(nn.Module):
         y = self.feed_forward(y)
 
         # Final add and norm
-        y = self.dropout(y + residual)
+        #y = self.dropout(y + residual)
+        y = y
         y = self.final_norm(y)
 
         return y
@@ -307,46 +387,17 @@ class Feed_foward(nn.Module):
         return self.net(x)
 
 
-class Bi_mamba_plus(nn.Module):
-
-    def __init__(self, config: EmetConfig):
-        super().__init__()
-        self.config = copy(config)
-
-        self.config.d_model = self.config.d_model + 1  # adding s
-        self.config.d_inner = self.config.d_model * self.config.expand_factor
-
-        self.feed_forward = Feed_foward(
-            self.config.d_model, self.config.d_inner, self.config
-        )
-
-        self.bi_mamba = BiMamba(self.config).to(device=self.config.device)
-
-        self.dropout = nn.Dropout(p=self.config.dropout).to(self.config.device)
-
-        self.normalization = nn.InstanceNorm1d(self.config.d_model, device=self.config.device)
-
-    def forward(self, x):
-
-        residual = x
-
-        x = self.bi_mamba(x)
-
-        x = self.dropout(x + residual)
-
-        x = self.feed_forward(x)
-
-        return x
 
 
-# if __name__ == "__main__":
 
-    # B, L, D = 40, 100, 3
-    # config = EmetConfig(D, L)
-    # x = torch.randn(B, L, D).to(config.device)
-    # model = EmetMamba(config)
+if __name__ == "__main__":
 
-    # y = model(x)
+    B, N, L, D = 2, 10, 100, 3
+    config = EmetConfig(D, 16)
+    x = torch.randn(B, N, L, D).to(config.device)
+    model = EmetMamba(config)
+
+    y = model(x)
     # print(x.size())
     # print(y[0].size())
     # print(y[1].size())
