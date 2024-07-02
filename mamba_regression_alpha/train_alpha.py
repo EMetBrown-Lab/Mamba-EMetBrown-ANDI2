@@ -54,7 +54,9 @@ def apply_padding(data_df, N, T_max):
         
         # Extract the data and labels for the current trajectory
         data = exp[["frame", "x", "y"]].to_numpy()
-        # print(exp["frame"])
+        data[:,0] = data[:,0] - data[0,0] + 1 #putting first frame rate to 1
+        data[:,1] = data[:,1] - data[0,1] #putting initial position to 0
+        data[:,2] = data[:,2] - data[0,2] #putting initital position to 0        # print(exp["frame"])
         label = exp[["alpha", "D", "state"]].to_numpy()
         ## adding one to the states
         label[:,2] = label[:,2] + 1
@@ -230,7 +232,7 @@ class Dataset_all_data(Dataset):
 def add_noise(data):
     noise_amplitude = np.random.choice([0.01, 0.1,])
     noise = np.random.normal(0, noise_amplitude, data[:,:,:].shape)
-    data[:,:,1:] = data[:,:,:] + data[:,:,:]*noise
+    data[:,:,:][data[:,:,1:] != 0] = data[:,:,:][data[:,:,1:] != 0] + data[:,:,:][data[:,:,1:] != 0]*noise
     return  data
 
 def train(a):
