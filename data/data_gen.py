@@ -210,19 +210,22 @@ def generate_random_experiment(n_exp, m=None):
 
 # %%
 def main(n):
-    np.random.seed()
-    dics = generate_random_experiment(50, m=n[0])
-    challenge_phenom_dataset(
-        dics=dics,
-        save_data=True,
-        files_reorg=False,
-        repeat_exp=True,
-        path= n[2] + str(n[0]) + "/" + str(n[1]) + "/",
-        save_labels_reorg=True,
-        return_timestep_labs=True,
-        # prefix = str(n) + "_",
-        delete_raw=True,
-    )
+    try: 
+        np.random.seed()
+        dics = generate_random_experiment(50, m=n[0])
+        challenge_phenom_dataset(
+            dics=dics,
+            save_data=True,
+            files_reorg=False,
+            repeat_exp=True,
+            path= n[2] + str(n[0]) + "/" + str(n[1]) + "/",
+            save_labels_reorg=True,
+            return_timestep_labs=True,
+            # prefix = str(n) + "_",
+            delete_raw=True,
+        )
+    except:
+        pass
 
 
 # main((1,1))
@@ -240,10 +243,10 @@ if __name__ == "__main__":
     #         save_labels_reorg=False,
     #         return_timestep_labs=True,
     #     )
-    for batch in range(1,11):
+    for batch in range(3,20):
 
-        with Pool(18) as p:
-            exp = [1, 2, 3, 4, 5]
+        with Pool(10) as p:
+            exp = np.arange(20)
             exps = np.random.choice(exp, size=1000)
-            runs = [(i, n, f"./data/small_batch_{batch}/") for n, i in enumerate(exps)]
+            runs = [(i, n, f"./datasets/small_batch_{batch}/") for n, i in enumerate(exps)]
             print(p.map(main, runs))
