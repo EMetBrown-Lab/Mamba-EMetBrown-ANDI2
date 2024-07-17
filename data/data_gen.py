@@ -19,7 +19,7 @@ def generate_random_experiment(n_exp, m=None):
     for m in models:
         dic = _get_dic_andi2(m)
 
-        dic["T"] = np.random.randint(low=200, high=500, dtype=int)
+        dic["T"] = 200
         dic["N"] = np.random.randint(low=20, high=150, dtype=int)
         dic["L"] = 1.5 * 128
 
@@ -243,10 +243,29 @@ if __name__ == "__main__":
     #         save_labels_reorg=False,
     #         return_timestep_labs=True,
     #     )
-    for batch in range(3,20):
+    # for batch in range(3,20):
 
-        with Pool(10) as p:
-            exp = np.arange(20)
-            exps = np.random.choice(exp, size=1000)
-            runs = [(i, n, f"./datasets/small_batch_{batch}/") for n, i in enumerate(exps)]
-            print(p.map(main, runs))
+    #     with Pool(10) as p:
+    #         exp = np.arange(20)
+    #         exps = np.random.choice(exp, size=1000)
+    #         runs = [(i, n, f"./datasets/small_batch_{batch}/") for n, i in enumerate(exps)]
+    #         print(p.map(main, runs))
+
+    np.random.seed()
+    dics = generate_random_experiment(10)
+
+
+    challenge_phenom_dataset(
+            dics=dics,
+            save_data=True,
+            files_reorg=False,
+            # repeat_exp=True,
+            path= "/home/m.lavaud/ANDI_2_Challenge_EMetBrown/data/test_dataset/ref/exps_to_move",
+            save_labels_reorg=True,
+            return_timestep_labs=True,
+            num_fovs = 30,
+            # prefix = str(n) + "_",
+            # delete_raw=True,
+    )
+
+# %%
